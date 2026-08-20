@@ -34,7 +34,7 @@
     background: var(--paper);
     font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
     color: var(--ink);
-    padding: 16px 10px 90px;
+    padding: calc(16px + env(safe-area-inset-top)) 10px calc(90px + env(safe-area-inset-bottom));
     -webkit-font-smoothing: antialiased;
   }
   .num{ font-variant-numeric: tabular-nums; }
