@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>우리 집 가계부</title>
 
 <!-- 아이폰 홈 화면 추가(PWA) 설정 -->
@@ -28,7 +28,7 @@
     --saving: #2C5A7A;
     --stamp: #B23A2F;
   }
-  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent; touch-action: manipulation;}
   body{
     margin:0;
     background: var(--paper);
@@ -96,7 +96,12 @@
     padding: 10px 4px 8px; text-align:center; cursor:pointer; user-select:none;
   }
   .tile:active{ transform: scale(0.95); }
+  .tile.pressing{ background: #FBEAEA; border-color: var(--expense); transition: background .2s, border-color .2s; }
   .tile .name{ font-size:10.5px; margin-top:4px; color:var(--ink); line-height:1.2; }
+  .tile.add-tile{
+    background: transparent; border:1px dashed var(--line) !important; border-top-style:dashed !important;
+  }
+  .tile.add-tile .name{ color: var(--ink-soft); font-weight:700; }
 
   .tabbar{
     position:absolute; bottom:0; left:0; right:0; height:56px;
@@ -198,7 +203,7 @@ try{
   console.error("Firebase 초기화 실패", e);
 }
 
-const CATS = {
+const BASE_CATS = {
   income: [
     {name:"급여(남편)"},
     {name:"급여(아내)"},
@@ -223,12 +228,20 @@ const CATS = {
     {name:"여유적금"}
   ]
 };
+// 사용자가 "+"로 직접 추가한 카테고리 (Firebase에 저장되어 두 분 모두에게 동기화됨)
+let customCats = { income: [], expense: [], saving: [] };
+
+function allCats(type){
+  return BASE_CATS[type].map(c=>({...c, custom:false}))
+    .concat(customCats[type].map(c=>({...c, custom:true})));
+}
+
 const TYPE_LABEL = {income:"수입", expense:"지출", saving:"저축"};
 const TYPE_COLOR = {income:"var(--income)", expense:"var(--expense)", saving:"var(--saving)"};
 
 function findCat(name){
-  for(const type of Object.keys(CATS)){
-    const found = CATS[type].find(c=>c.name===name);
+  for(const type of Object.keys(BASE_CATS)){
+    const found = allCats(type).find(c=>c.name===name);
     if(found) return {...found, type};
   }
   return {type:"expense"};
@@ -266,8 +279,10 @@ async function load(){
     if(snap.exists){
       const data = snap.data();
       state.transactions = data.transactions ? JSON.parse(data.transactions) : [];
+      customCats = data.customCategories ? JSON.parse(data.customCategories) : { income: [], expense: [], saving: [] };
     } else {
       state.transactions = [];
+      customCats = { income: [], expense: [], saving: [] };
     }
     render();
   }, (err) => {
@@ -285,7 +300,10 @@ async function load(){
 async function save(){
   if(!firebaseReady) return;
   try{
-    await docRef.set({ transactions: JSON.stringify(state.transactions) });
+    await docRef.set({
+      transactions: JSON.stringify(state.transactions),
+      customCategories: JSON.stringify(customCats)
+    });
   }catch(e){
     console.error("저장 실패", e);
     alert("저장에 실패했어요. 인터넷 연결과 Firebase 설정을 확인해주세요.");
@@ -293,12 +311,28 @@ async function save(){
 }
 function addTransaction(tx){ state.transactions.push(tx); save(); render(); }
 function deleteTransaction(id){ state.transactions = state.transactions.filter(t=>t.id!==id); save(); render(); }
+function addCategory(type, name){
+  const trimmed = name.trim();
+  if(!trimmed) return false;
+  const exists = allCats(type).some(c => c.name === trimmed);
+  if(exists) return false;
+  customCats[type].push({ name: trimmed });
+  save();
+  render();
+  return true;
+}
+function removeCategory(type, name){
+  customCats[type] = customCats[type].filter(c => c.name !== name);
+  save();
+  render();
+}
 function monthTx(){ return state.transactions.filter(t=>monthOf(t.date)===state.month); }
 
 function openKeypad(cat){
   const overlay = document.createElement('div');
   overlay.className = 'overlay';
   let amountStr = "";
+  const defaultDate = (state.month === monthOf(todayStr())) ? todayStr() : `${state.month}-01`;
   overlay.innerHTML = `
     <div class="sheet">
       <div class="head">
@@ -306,6 +340,7 @@ function openKeypad(cat){
         <span class="type" style="background:${TYPE_COLOR[cat.type]}">${TYPE_LABEL[cat.type]}</span>
       </div>
       <div class="display" id="kpDisplay">0원</div>
+      <input type="date" class="memoline" id="kpDate" value="${defaultDate}">
       <input type="text" class="memoline" id="kpMemo" placeholder="메모 (선택)">
       <div class="keys">
         ${["1","2","3","4","5","6","7","8","9","00","0","⌫"].map(k=>`<button data-k="${k}">${k}</button>`).join("")}
@@ -332,7 +367,7 @@ function openKeypad(cat){
     if(!amt || amt<=0){ display.style.color = 'var(--expense)'; return; }
     addTransaction({
       id: uid(),
-      date: todayStr(),
+      date: overlay.querySelector('#kpDate').value || defaultDate,
       type: cat.type,
       category: cat.name,
       amount: amt,
@@ -386,11 +421,11 @@ function render(){
 
     <div class="tabpanel active" id="panel-home">
       <div class="section-title">수입 · 탭해서 바로 기록</div>
-      <div class="grid">${CATS.income.map(c=>tileHtml(c,'income')).join("")}</div>
+      <div class="grid">${allCats('income').map(c=>tileHtml(c,'income')).join("")}</div>
       <div class="section-title">지출</div>
-      <div class="grid">${CATS.expense.map(c=>tileHtml(c,'expense')).join("")}</div>
+      <div class="grid">${allCats('expense').map(c=>tileHtml(c,'expense')).join("")}${addTileHtml('expense')}</div>
       <div class="section-title">저축</div>
-      <div class="grid">${CATS.saving.map(c=>tileHtml(c,'saving')).join("")}</div>
+      <div class="grid">${allCats('saving').map(c=>tileHtml(c,'saving')).join("")}</div>
     </div>
 
     <div class="tabpanel" id="panel-history">
@@ -413,8 +448,38 @@ function render(){
   document.getElementById('prevM').onclick = ()=>{ state.month = shiftMonth(state.month,-1); render(); };
   document.getElementById('nextM').onclick = ()=>{ state.month = shiftMonth(state.month,1); render(); };
 
-  document.querySelectorAll('.tile').forEach(t=>{
-    t.onclick = () => openKeypad({name:t.dataset.name, type:t.dataset.type});
+  document.querySelectorAll('.tile:not(.add-tile)').forEach(t=>{
+    let pressTimer = null;
+    let longPressed = false;
+    const isCustom = t.dataset.custom === '1';
+
+    const startPress = () => {
+      longPressed = false;
+      if(!isCustom) return;
+      t.classList.add('pressing');
+      pressTimer = setTimeout(() => {
+        longPressed = true;
+        t.classList.remove('pressing');
+        confirmDeleteCategory(t.dataset.type, t.dataset.name);
+      }, 550);
+    };
+    const cancelPress = () => {
+      clearTimeout(pressTimer);
+      t.classList.remove('pressing');
+    };
+
+    t.addEventListener('pointerdown', startPress);
+    t.addEventListener('pointerup', cancelPress);
+    t.addEventListener('pointerleave', cancelPress);
+    t.addEventListener('pointercancel', cancelPress);
+
+    t.onclick = () => {
+      if(longPressed){ longPressed = false; return; }
+      openKeypad({name:t.dataset.name, type:t.dataset.type});
+    };
+  });
+  document.querySelectorAll('.add-tile').forEach(t=>{
+    t.onclick = () => openAddCategory(t.dataset.type);
   });
 
   const sweepBtn = document.getElementById('sweepBtn');
@@ -435,9 +500,75 @@ function render(){
 }
 
 function tileHtml(c, type){
-  return `<div class="tile" data-name="${c.name}" data-type="${type}" style="border-top:3px solid ${TYPE_COLOR[type]};">
+  return `<div class="tile" data-name="${c.name}" data-type="${type}" data-custom="${c.custom ? '1':'0'}" style="border-top:3px solid ${TYPE_COLOR[type]};">
     <div class="name">${c.name}</div>
   </div>`;
+}
+
+function addTileHtml(type){
+  return `<div class="tile add-tile" data-type="${type}" style="border-top:3px solid ${TYPE_COLOR[type]};">
+    <div class="name">+ 추가</div>
+  </div>`;
+}
+
+function confirmDeleteCategory(type, name){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay';
+  overlay.innerHTML = `
+    <div class="sheet">
+      <div class="head">
+        <span class="name">"${escapeHtml(name)}" 삭제할까요?</span>
+      </div>
+      <div style="font-size:13px; color:var(--ink-soft); margin-bottom:14px;">
+        지난 기록은 그대로 남고, 홈 화면의 빠른 입력 목록에서만 사라져요.
+      </div>
+      <div class="actions">
+        <button class="cancel" id="delCancel">취소</button>
+        <button class="save" id="delConfirm" style="background:var(--expense);">삭제하기</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#delCancel').onclick = () => overlay.remove();
+  overlay.querySelector('#delConfirm').onclick = () => {
+    removeCategory(type, name);
+    overlay.remove();
+  };
+  overlay.onclick = (e) => { if(e.target === overlay) overlay.remove(); };
+}
+
+function openAddCategory(type){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay';
+  overlay.innerHTML = `
+    <div class="sheet">
+      <div class="head">
+        <span class="name">${TYPE_LABEL[type]} 항목 추가</span>
+        <span class="type" style="background:${TYPE_COLOR[type]}">${TYPE_LABEL[type]}</span>
+      </div>
+      <input type="text" class="memoline" id="newCatName" placeholder="항목 이름 (예: 반려동물비)" autofocus>
+      <div class="actions">
+        <button class="cancel" id="acCancel">취소</button>
+        <button class="save" id="acSave">추가하기</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  const input = overlay.querySelector('#newCatName');
+  setTimeout(()=>input.focus(), 50);
+  overlay.querySelector('#acCancel').onclick = () => overlay.remove();
+  overlay.querySelector('#acSave').onclick = () => {
+    const ok = addCategory(type, input.value);
+    if(!ok){
+      input.style.borderColor = 'var(--expense)';
+      return;
+    }
+    overlay.remove();
+  };
+  input.addEventListener('keydown', (e)=>{
+    if(e.key === 'Enter') overlay.querySelector('#acSave').click();
+  });
+  overlay.onclick = (e) => { if(e.target === overlay) overlay.remove(); };
 }
 
 function historyHtml(list){
