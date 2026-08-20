@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>우리 집 가계부</title>
+
+<!-- 아이폰 홈 화면 추가(PWA) 설정 -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="가계부">
+<meta name="theme-color" content="#1F2A38">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="manifest" href="manifest.json">
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<style>
+  :root{
+    --paper: #EAEEE0;
+    --card: #F5F6EF;
+    --card2: #FFFFFF;
+    --ink: #1F2A38;
+    --ink-soft: #5B6472;
+    --line: #D6DAC9;
+    --income: #2F6B4F;
+    --expense: #8B3A3A;
+    --saving: #2C5A7A;
+    --stamp: #B23A2F;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  body{
+    margin:0;
+    background: var(--paper);
+    font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+    color: var(--ink);
+    padding: 16px 10px 90px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .num{ font-variant-numeric: tabular-nums; }
+  .app{
+    max-width: 480px;
+    margin: 0 auto;
+    background: var(--card);
+    border-radius: 18px;
+    box-shadow: 0 10px 30px rgba(31,42,56,0.15);
+    overflow: hidden;
+    border: 1px solid var(--line);
+    min-height: 70vh;
+    position: relative;
+    padding-bottom: 64px;
+  }
+  .cover{
+    background: var(--ink);
+    color: var(--paper);
+    padding: 18px 20px 20px;
+  }
+  .cover .brand{ font-size:10px; letter-spacing:3px; opacity:0.55; text-transform:uppercase; }
+  .cover h1{ font-weight:800; font-size:22px; margin:4px 0 0; letter-spacing:-0.3px; }
+  .month-nav{ display:flex; align-items:center; justify-content:space-between; margin-top:12px; }
+  .month-nav button{ background:rgba(255,255,255,0.12); border:none; color:var(--paper); width:28px; height:28px; border-radius:50%; cursor:pointer; font-size:14px; }
+  .month-nav button:hover{ background:rgba(255,255,255,0.22); }
+  .month-nav .label{ font-size:15px; font-variant-numeric: tabular-nums; }
+
+  .gauge-wrap{ padding: 18px 20px 6px; }
+  .gauge-track{ height:10px; border-radius:6px; background:#DCE1D2; overflow:hidden; }
+  .gauge-fill{ height:100%; border-radius:6px; transition: width .4s ease; }
+  .gauge-labels{ display:flex; justify-content:space-between; font-size:11px; color:var(--ink-soft); margin-top:6px; }
+
+  .summary{ display:grid; grid-template-columns:repeat(3,1fr); gap:8px; padding: 6px 20px 4px; }
+  .summary .cell{ background:var(--card2); border:1px solid var(--line); border-radius:10px; padding:10px 6px; text-align:center; }
+  .summary .cell .lbl{ font-size:10px; color:var(--ink-soft); margin-bottom:3px; }
+  .summary .cell .val{ font-size:13px; font-weight:700; font-variant-numeric: tabular-nums; }
+  .summary .cell.income .val{ color:var(--income); }
+  .summary .cell.expense .val{ color:var(--expense); }
+  .summary .cell.saving .val{ color:var(--saving); }
+
+  .leftover{
+    margin: 12px 20px 4px; padding: 10px 12px; border:1px dashed var(--line); border-radius:10px;
+    display:flex; align-items:center; justify-content:space-between; gap:10px; background:#F0F1E9; position:relative;
+  }
+  .leftover .txt{ font-size:12px; line-height:1.4; }
+  .leftover .amt{ font-weight:700; color:var(--saving); font-variant-numeric: tabular-nums; }
+  .leftover button{ background:var(--saving); color:#fff; border:none; border-radius:6px; padding:8px 10px; font-size:11px; cursor:pointer; white-space:nowrap; }
+  .leftover button:disabled{ background:#9aa6ac; }
+  .stamp{
+    position:absolute; right:10px; top:-10px; border:3px solid var(--stamp); color:var(--stamp);
+    border-radius:50%; width:50px; height:50px; display:flex; align-items:center; justify-content:center;
+    font-size:10px; font-weight:800; text-align:center; transform:rotate(-14deg); background:rgba(178,58,47,0.06); line-height:1.05;
+  }
+
+  .section-title{ font-size:12px; color:var(--ink-soft); margin: 16px 20px 6px; letter-spacing:1px; }
+  .grid{ display:grid; grid-template-columns:repeat(4,1fr); gap:8px; padding: 0 20px; }
+  .tile{
+    background: var(--card2); border:1px solid var(--line); border-radius:12px;
+    padding: 10px 4px 8px; text-align:center; cursor:pointer; user-select:none;
+  }
+  .tile:active{ transform: scale(0.95); }
+  .tile .name{ font-size:10.5px; margin-top:4px; color:var(--ink); line-height:1.2; }
+
+  .tabbar{
+    position:absolute; bottom:0; left:0; right:0; height:56px;
+    display:flex; background:var(--card2); border-top:1px solid var(--line);
+  }
+  .tabbar button{
+    flex:1; border:none; background:none; cursor:pointer; font-size:11px; color:var(--ink-soft);
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
+  }
+  .tabbar button.active{ color:var(--ink); font-weight:700; }
+
+  .tabpanel{ display:none; padding-bottom: 10px; }
+  .tabpanel.active{ display:block; }
+
+  .list{ margin: 4px 20px 10px; }
+  .day-label{ font-size:11px; color:var(--ink-soft); margin:14px 0 4px; border-bottom:1px solid var(--line); padding-bottom:3px; }
+  .row{ display:flex; align-items:center; gap:8px; padding:8px 2px; border-bottom:1px dotted var(--line); }
+  .row .dot{ width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+  .row .memo{ flex:1; font-size:12.5px; color:var(--ink-soft); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .row .amount{ font-weight:700; font-size:13px; white-space:nowrap; font-variant-numeric: tabular-nums; }
+  .row .amount.income{ color:var(--income); }
+  .row .amount.expense{ color:var(--expense); }
+  .row .amount.saving{ color:var(--saving); }
+  .row .del{ background:none; border:none; color:#b8bcae; cursor:pointer; font-size:13px; }
+  .row .del:hover{ color:var(--expense); }
+  .empty{ text-align:center; color:var(--ink-soft); font-size:12.5px; padding:30px 10px; }
+
+  .bar-row{ margin: 0 20px 12px; }
+  .bar-row .top{ display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px; }
+  .bar-row .top .name{ display:flex; gap:6px; align-items:center; }
+  .bar-track{ height:8px; border-radius:5px; background:#DCE1D2; overflow:hidden; }
+  .bar-fill{ height:100%; border-radius:5px; }
+
+  .footer{ text-align:center; padding: 8px 0 6px; font-size:10.5px; color:var(--ink-soft); }
+  .footer button{ background:none; border:none; text-decoration:underline; color:var(--ink-soft); cursor:pointer; font-size:10.5px; }
+
+  /* Keypad modal */
+  .overlay{
+    position:fixed; inset:0; background:rgba(31,42,56,0.45); display:flex; align-items:flex-end; justify-content:center;
+    z-index: 50;
+  }
+  .sheet{
+    width:100%; max-width:480px; background:var(--card2); border-radius:18px 18px 0 0; padding: 18px 20px 24px;
+    animation: slideup .18s ease-out;
+  }
+  @keyframes slideup{ from{ transform:translateY(30px); opacity:0;} to{ transform:translateY(0); opacity:1;} }
+  .sheet .head{ display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+  .sheet .head .name{ font-weight:700; font-size:15px; }
+  .sheet .head .type{ margin-left:auto; font-size:11px; padding:3px 8px; border-radius:10px; color:#fff; }
+  .sheet .display{
+    font-size:28px; text-align:right; padding: 14px 4px; border-bottom:2px solid var(--line); margin-bottom:12px;
+    font-variant-numeric: tabular-nums;
+  }
+  .sheet .memoline{ width:100%; padding:8px; border:1px solid var(--line); border-radius:8px; font-size:13px; margin-bottom:10px; font-family:inherit; }
+  .keys{ display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+  .keys button{
+    padding: 14px 0; font-size:18px; border-radius:10px; border:1px solid var(--line); background:#fff; cursor:pointer;
+  }
+  .keys button:active{ background:#EEF0E6; }
+  .sheet .actions{ display:flex; gap:8px; margin-top:12px; }
+  .sheet .actions button{ flex:1; padding:12px; border-radius:8px; border:none; font-size:14px; cursor:pointer; }
+  .sheet .actions .cancel{ background:#EAEAE2; color:var(--ink-soft); }
+  .sheet .actions .save{ background:var(--ink); color:var(--paper); font-weight:700; }
+
+  .loading{ text-align:center; padding:40px; color:var(--ink-soft); font-size:13px; }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <div class="loading" id="loading">불러오는 중…</div>
+</div>
+
+<script>
+// ============================================================
+// Firebase 설정 — Firebase 콘솔(console.firebase.google.com)에서
+// 프로젝트 만들고 "웹 앱 추가" 하면 아래 값들을 그대로 복사할 수 있어요.
+// 이 6줄만 본인 값으로 바꾸면 됩니다.
+// ============================================================
+const firebaseConfig = {
+  apiKey: "AIzaSyCwUnvP9zOc2thu468mU_l1aLLHNxkSjTA",
+  authDomain: "home-a8c48.firebaseapp.com",
+  projectId: "home-a8c48",
+  storageBucket: "home-a8c48.firebasestorage.app",
+  messagingSenderId: "743304386446",
+  appId: "1:743304386446:web:033fded8198508f5ebb6df"
+};
+
+let db = null;
+let docRef = null;
+let firebaseReady = false;
+
+try{
+  firebase.initializeApp(firebaseConfig);
+  db = firebase.firestore();
+  // 두 분이 쓰는 문서 하나만 사용 — household/main
+  docRef = db.collection('household').doc('main');
+  firebaseReady = true;
+}catch(e){
+  console.error("Firebase 초기화 실패", e);
+}
+
+const CATS = {
+  income: [
+    {name:"급여(남편)"},
+    {name:"급여(아내)"},
+    {name:"기타수입"}
+  ],
+  expense: [
+    {name:"교통비"},
+    {name:"통신비"},
+    {name:"보험"},
+    {name:"공과금"},
+    {name:"차량"},
+    {name:"OTT/구독"},
+    {name:"대출이자"},
+    {name:"개인용돈"},
+    {name:"생활비"},
+    {name:"경조사비"},
+    {name:"여행비"}
+  ],
+  saving: [
+    {name:"개인적금"},
+    {name:"비상금"},
+    {name:"여유적금"}
+  ]
+};
+const TYPE_LABEL = {income:"수입", expense:"지출", saving:"저축"};
+const TYPE_COLOR = {income:"var(--income)", expense:"var(--expense)", saving:"var(--saving)"};
+
+function findCat(name){
+  for(const type of Object.keys(CATS)){
+    const found = CATS[type].find(c=>c.name===name);
+    if(found) return {...found, type};
+  }
+  return {type:"expense"};
+}
+
+let state = { transactions: [], month: null, tab: "home" };
+
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+function monthOf(d){ return d.slice(0,7); }
+function fmt(n){ return (n<0?"-":"") + Math.abs(n).toLocaleString() + "원"; }
+function monthLabel(ym){ const [y,m]=ym.split("-"); return `${y}년 ${parseInt(m)}월`; }
+function shiftMonth(ym, delta){
+  let [y,m] = ym.split("-").map(Number);
+  m += delta; if(m<1){m=12;y-=1;} if(m>12){m=1;y+=1;}
+  return `${y}-${String(m).padStart(2,"0")}`;
+}
+function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
+function escapeHtml(str){ const d=document.createElement('div'); d.textContent=str; return d.innerHTML; }
+
+async function load(){
+  state.month = monthOf(todayStr());
+
+  if(!firebaseReady){
+    document.getElementById('app').innerHTML = `
+      <div class="loading">
+        Firebase 설정이 안 되어 있어요.<br><br>
+        코드 위쪽 firebaseConfig 값을<br>
+        본인의 Firebase 프로젝트 값으로 채워주세요.
+      </div>`;
+    return;
+  }
+
+  // 실시간 동기화: 상대방이 기록하면 내 화면도 자동으로 갱신됨
+  docRef.onSnapshot((snap) => {
+    if(snap.exists){
+      const data = snap.data();
+      state.transactions = data.transactions ? JSON.parse(data.transactions) : [];
+    } else {
+      state.transactions = [];
+    }
+    render();
+  }, (err) => {
+    console.error("동기화 오류", err);
+    document.getElementById('app').innerHTML = `
+      <div class="loading">
+        데이터를 불러오지 못했어요.<br><br>
+        Firestore 보안 규칙(Rules)에서<br>
+        읽기/쓰기 권한을 확인해주세요.<br><br>
+        (오류: ${escapeHtml(err.message || String(err))})
+      </div>`;
+  });
+}
+
+async function save(){
+  if(!firebaseReady) return;
+  try{
+    await docRef.set({ transactions: JSON.stringify(state.transactions) });
+  }catch(e){
+    console.error("저장 실패", e);
+    alert("저장에 실패했어요. 인터넷 연결과 Firebase 설정을 확인해주세요.");
+  }
+}
+function addTransaction(tx){ state.transactions.push(tx); save(); render(); }
+function deleteTransaction(id){ state.transactions = state.transactions.filter(t=>t.id!==id); save(); render(); }
+function monthTx(){ return state.transactions.filter(t=>monthOf(t.date)===state.month); }
+
+function openKeypad(cat){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay';
+  let amountStr = "";
+  overlay.innerHTML = `
+    <div class="sheet">
+      <div class="head">
+        <span class="name">${cat.name}</span>
+        <span class="type" style="background:${TYPE_COLOR[cat.type]}">${TYPE_LABEL[cat.type]}</span>
+      </div>
+      <div class="display" id="kpDisplay">0원</div>
+      <input type="text" class="memoline" id="kpMemo" placeholder="메모 (선택)">
+      <div class="keys">
+        ${["1","2","3","4","5","6","7","8","9","00","0","⌫"].map(k=>`<button data-k="${k}">${k}</button>`).join("")}
+      </div>
+      <div class="actions">
+        <button class="cancel" id="kpCancel">취소</button>
+        <button class="save" id="kpSave">기록하기</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  const display = overlay.querySelector('#kpDisplay');
+  overlay.querySelectorAll('.keys button').forEach(btn=>{
+    btn.onclick = () => {
+      const k = btn.dataset.k;
+      if(k === "⌫"){ amountStr = amountStr.slice(0,-1); }
+      else { if(amountStr.length < 9) amountStr += k; }
+      display.textContent = (amountStr ? parseInt(amountStr,10) : 0).toLocaleString() + "원";
+    };
+  });
+  overlay.querySelector('#kpCancel').onclick = () => overlay.remove();
+  overlay.querySelector('#kpSave').onclick = () => {
+    const amt = parseInt(amountStr || "0", 10);
+    if(!amt || amt<=0){ display.style.color = 'var(--expense)'; return; }
+    addTransaction({
+      id: uid(),
+      date: todayStr(),
+      type: cat.type,
+      category: cat.name,
+      amount: amt,
+      memo: overlay.querySelector('#kpMemo').value.trim()
+    });
+    overlay.remove();
+  };
+  overlay.onclick = (e) => { if(e.target === overlay) overlay.remove(); };
+}
+
+function render(){
+  const list = monthTx();
+  const totals = {income:0, expense:0, saving:0};
+  list.forEach(t => totals[t.type] += t.amount);
+  const leftover = totals.income - totals.expense - totals.saving;
+  const alreadyLogged = list.some(t => t.category === "여유적금" && t.memo === "자동 계산");
+  const spendRatio = totals.income > 0 ? Math.min(100, Math.round(((totals.expense+totals.saving)/totals.income)*100)) : 0;
+  const gaugeColor = spendRatio < 70 ? "var(--income)" : spendRatio < 95 ? "#C9A227" : "var(--expense)";
+
+  const app = document.getElementById('app');
+  app.innerHTML = `
+    <div class="cover">
+      <div class="brand">Household Passbook</div>
+      <h1>우리 집 가계부</h1>
+      <div class="month-nav">
+        <button id="prevM">‹</button>
+        <div class="label">${monthLabel(state.month)}</div>
+        <button id="nextM">›</button>
+      </div>
+    </div>
+
+    <div class="gauge-wrap">
+      <div class="gauge-track"><div class="gauge-fill" style="width:${spendRatio}%; background:${gaugeColor};"></div></div>
+      <div class="gauge-labels"><span>이번 달 지출+저축 ${spendRatio}%</span><span>수입 ${fmt(totals.income)}</span></div>
+    </div>
+
+    <div class="summary">
+      <div class="cell income"><div class="lbl">수입</div><div class="val">${fmt(totals.income)}</div></div>
+      <div class="cell expense"><div class="lbl">지출</div><div class="val">${fmt(totals.expense)}</div></div>
+      <div class="cell saving"><div class="lbl">저축</div><div class="val">${fmt(totals.saving)}</div></div>
+    </div>
+
+    <div class="leftover">
+      <div class="txt">이번 달 남는 돈<br><span class="amt">${fmt(leftover)}</span></div>
+      ${
+        alreadyLogged ? `<div class="stamp">적립<br>완료</div>`
+        : leftover > 0 ? `<button id="sweepBtn">전액 적금으로</button>`
+        : `<button disabled>남는 돈 없음</button>`
+      }
+    </div>
+
+    <div class="tabpanel active" id="panel-home">
+      <div class="section-title">수입 · 탭해서 바로 기록</div>
+      <div class="grid">${CATS.income.map(c=>tileHtml(c,'income')).join("")}</div>
+      <div class="section-title">지출</div>
+      <div class="grid">${CATS.expense.map(c=>tileHtml(c,'expense')).join("")}</div>
+      <div class="section-title">저축</div>
+      <div class="grid">${CATS.saving.map(c=>tileHtml(c,'saving')).join("")}</div>
+    </div>
+
+    <div class="tabpanel" id="panel-history">
+      <div class="list">${historyHtml(list)}</div>
+    </div>
+
+    <div class="tabpanel" id="panel-stats">
+      ${statsHtml(list, totals)}
+    </div>
+
+    <div class="footer"><button id="resetBtn">전체 기록 초기화</button></div>
+
+    <div class="tabbar">
+      <button data-tab="home" class="${state.tab==='home'?'active':''}">홈</button>
+      <button data-tab="history" class="${state.tab==='history'?'active':''}">내역</button>
+      <button data-tab="stats" class="${state.tab==='stats'?'active':''}">통계</button>
+    </div>
+  `;
+
+  document.getElementById('prevM').onclick = ()=>{ state.month = shiftMonth(state.month,-1); render(); };
+  document.getElementById('nextM').onclick = ()=>{ state.month = shiftMonth(state.month,1); render(); };
+
+  document.querySelectorAll('.tile').forEach(t=>{
+    t.onclick = () => openKeypad({name:t.dataset.name, type:t.dataset.type});
+  });
+
+  const sweepBtn = document.getElementById('sweepBtn');
+  if(sweepBtn){
+    sweepBtn.onclick = () => addTransaction({ id:uid(), date:todayStr(), type:"saving", category:"여유적금", amount:leftover, memo:"자동 계산" });
+  }
+
+  document.querySelectorAll('.del').forEach(btn=>{ btn.onclick = () => deleteTransaction(btn.dataset.id); });
+
+  document.getElementById('resetBtn').onclick = () => {
+    if(confirm("모든 기록을 삭제할까요? 되돌릴 수 없어요.")){ state.transactions = []; save(); render(); }
+  };
+
+  document.querySelectorAll('.tabbar button').forEach(btn=>{
+    btn.onclick = () => { state.tab = btn.dataset.tab; render(); };
+  });
+  showActiveTab();
+}
+
+function tileHtml(c, type){
+  return `<div class="tile" data-name="${c.name}" data-type="${type}" style="border-top:3px solid ${TYPE_COLOR[type]};">
+    <div class="name">${c.name}</div>
+  </div>`;
+}
+
+function historyHtml(list){
+  if(list.length === 0) return `<div class="empty">이 달에는 아직 기록이 없어요.<br>홈 탭에서 첫 기록을 남겨보세요.</div>`;
+  const grouped = {};
+  [...list].sort((a,b)=>b.date.localeCompare(a.date)).forEach(t=>{ (grouped[t.date]=grouped[t.date]||[]).push(t); });
+  return Object.keys(grouped).sort((a,b)=>b.localeCompare(a)).map(date => `
+    <div class="day-label">${date}</div>
+    ${grouped[date].map(t=>{
+      return `<div class="row">
+        <span class="dot" style="background:${TYPE_COLOR[t.type]};"></span>
+        <span class="memo">${t.category}${t.memo ? " · "+escapeHtml(t.memo) : ""}</span>
+        <span class="amount ${t.type}">${t.type==='expense'?'-':'+'}${t.amount.toLocaleString()}원</span>
+        <button class="del" data-id="${t.id}">✕</button>
+      </div>`;
+    }).join("")}
+  `).join("");
+}
+
+function statsHtml(list, totals){
+  const byCat = {};
+  list.forEach(t=>{
+    if(t.type === 'income') return;
+    byCat[t.category] = (byCat[t.category]||0) + t.amount;
+  });
+  const entries = Object.entries(byCat).sort((a,b)=>b[1]-a[1]);
+  const max = entries.length ? entries[0][1] : 1;
+  if(entries.length === 0) return `<div class="empty">아직 지출/저축 기록이 없어요.</div>`;
+  return entries.map(([name, amt])=>{
+    const cat = findCat(name);
+    const pct = Math.round((amt/max)*100);
+    return `<div class="bar-row">
+      <div class="top">
+        <span class="name">${name}</span>
+        <span>${fmt(amt)}</span>
+      </div>
+      <div class="bar-track"><div class="bar-fill" style="width:${pct}%; background:${TYPE_COLOR[cat.type]};"></div></div>
+    </div>`;
+  }).join("");
+}
+
+function showActiveTab(){
+  ['home','history','stats'].forEach(t=>{
+    const el = document.getElementById('panel-'+t);
+    if(el) el.classList.toggle('active', state.tab === t);
+  });
+}
+
+load();
+</script>
+</body>
+</html>
