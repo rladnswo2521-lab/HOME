@@ -120,24 +120,38 @@
   }
   .tile.add-tile .name{ color: var(--ink-soft); font-weight:700; }
 
-  .cal-topbar{ display:flex; justify-content:flex-end; padding: 10px 20px 0; }
+  .cal-topbar{ display:flex; justify-content:flex-end; gap:8px; padding: 10px 20px 0; }
   .cal-topbar button{
     background:var(--card2); border:1px solid var(--line); border-radius:14px; padding:4px 12px;
     font-size:11px; color:var(--ink-soft); cursor:pointer;
   }
+  .cal-topbar button.active{ background:var(--saving); border-color:var(--saving); color:#fff; }
   .calendar{ margin: 8px 20px 4px; }
   .cal-grid{ display:grid; grid-template-columns:repeat(7,1fr); gap:3px; }
   .cal-grid.cal-header{ margin-bottom:4px; }
   .cal-wd{ font-size:10px; text-align:center; color:var(--ink-soft); padding:2px 0; }
   .cal-cell{
     aspect-ratio: 1 / 1.15; border-radius:8px; padding:3px 1px; text-align:center; cursor:pointer;
-    display:flex; flex-direction:column; align-items:center; overflow:hidden;
+    display:flex; flex-direction:column; align-items:center; overflow:visible; position:relative;
   }
   .cal-cell.empty{ cursor:default; }
   .cal-cell.today{ background:#E9E9EC; }
   .cal-cell.selected{ background:var(--ink); }
+  .cal-cell.drag-over{ background:var(--income); outline:2px dashed #fff; outline-offset:-3px; }
   .cal-cell .daynum{ font-size:11px; font-weight:600; color:var(--ink); }
   .cal-cell.selected .daynum{ color:var(--paper); }
+  .cal-sticker-stack{
+    position:absolute; top:-7px; right:-2px; display:flex; align-items:center;
+    pointer-events:none;
+  }
+  .cal-sticker-item{ display:inline-flex; filter:drop-shadow(0 1px 1px rgba(0,0,0,0.15)); }
+  .cal-sticker-item:nth-child(odd){ transform:rotate(10deg); }
+  .cal-sticker-item:nth-child(even){ transform:rotate(-8deg); }
+  .cal-sticker-more{
+    font-size:7px; font-weight:700; color:#fff; background:var(--ink-soft);
+    border-radius:50%; width:13px; height:13px; display:flex; align-items:center; justify-content:center;
+    margin-left:-6px;
+  }
   .cal-amt{ font-size:8px; line-height:1.3; font-variant-numeric:tabular-nums; margin-top:1px; }
   .cal-amt.income{ color:var(--income); }
   .cal-amt.expense{ color:var(--expense); }
@@ -254,6 +268,38 @@
     font-size:13px; cursor:pointer; color:var(--ink-soft);
   }
   .seg button.active{ background:var(--ink); color:var(--paper); border-color:var(--ink); }
+
+  .sticker-grid{ display:grid; grid-template-columns:repeat(5,1fr); gap:8px; margin-bottom:14px; }
+  .sticker-opt{
+    background:#fff; border:1px solid var(--line); border-radius:10px; padding:8px 0;
+    display:flex; align-items:center; justify-content:center; cursor:pointer;
+  }
+  .sticker-opt:active{ transform:scale(0.94); background:var(--paper); }
+
+  .sticker-current{ display:flex; flex-wrap:wrap; gap:8px; margin-bottom:8px; }
+  .sticker-chip{
+    position:relative; background:var(--paper); border-radius:10px; padding:6px 16px 6px 6px;
+    display:inline-flex; align-items:center;
+  }
+  .sticker-chip-x{
+    position:absolute; top:-4px; right:-4px; width:16px; height:16px; border-radius:50%;
+    background:var(--expense); color:#fff; border:none; font-size:9px; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; padding:0;
+  }
+
+  .sticker-tray{
+    display:flex; gap:8px; overflow-x:auto; padding:10px 20px; margin: 4px 0;
+    background:var(--card2); border-top:1px solid var(--line); border-bottom:1px solid var(--line);
+  }
+  .sticker-tray-item{
+    flex-shrink:0; width:38px; height:38px; display:flex; align-items:center; justify-content:center;
+    background:#fff; border:1px solid var(--line); border-radius:10px; touch-action:none; cursor:grab;
+  }
+  .sticker-ghost{
+    position:fixed; width:36px; height:36px; pointer-events:none; z-index:999;
+    opacity:0.85; transform:scale(1.2); filter:drop-shadow(0 4px 8px rgba(0,0,0,0.25));
+  }
+  .sticker-tray-hint{ font-size:10.5px; color:var(--ink-soft); text-align:center; padding:2px 20px 0; }
   .keys{ display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
   .keys button{
     padding: 14px 0; font-size:18px; border-radius:10px; border:1px solid var(--line); background:#fff; cursor:pointer;
@@ -347,6 +393,57 @@ const BASE_CATS = {
 };
 // 사용자가 "+"로 직접 추가한 카테고리 (Firebase에 저장되어 두 분 모두에게 동기화됨)
 let customCats = { income: [], expense: [], saving: [] };
+// 다이어리 꾸미기용 스티커: { 'YYYY-MM-DD': 'star' }
+let decorations = {};
+
+function rayMarkup(cx, cy, rIn, rOut, count, color, width){
+  let s = '';
+  for(let i=0;i<count;i++){
+    const a = (i * (360/count)) * Math.PI/180;
+    const x1 = cx + rIn*Math.cos(a), y1 = cy + rIn*Math.sin(a);
+    const x2 = cx + rOut*Math.cos(a), y2 = cy + rOut*Math.sin(a);
+    s += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${color}" stroke-width="${width}" stroke-linecap="round"/>`;
+  }
+  return s;
+}
+
+const STICKERS = {
+  star:   { markup: `<path d="M12 2 L14.5 9.2 L22 9.6 L16 14.4 L18 21.8 L12 17.4 L6 21.8 L8 14.4 L2 9.6 L9.5 9.2 Z" fill="#F4C542"/>` },
+  heart:  { markup: `<path d="M12 20 C4 14.5 3 9.8 6 7.2 C8 5.4 10.6 5.8 12 8 C13.4 5.8 16 5.4 18 7.2 C21 9.8 20 14.5 12 20 Z" fill="#E2685C"/>` },
+  flower: { markup: `<circle cx="12" cy="6" r="4" fill="#8574C9"/><circle cx="12" cy="18" r="4" fill="#8574C9"/><circle cx="6" cy="12" r="4" fill="#8574C9"/><circle cx="18" cy="12" r="4" fill="#8574C9"/><circle cx="12" cy="12" r="4" fill="#F4C542"/>` },
+  ribbon: { markup: `<path d="M12 12 L3 6 L3 10 L12 12 L3 14 L3 18 Z" fill="#3B7DD8"/><path d="M12 12 L21 6 L21 10 L12 12 L21 14 L21 18 Z" fill="#3B7DD8"/><circle cx="12" cy="12" r="2.4" fill="#2F63B0"/>` },
+  sparkle:{ markup: `<path d="M12 2 L13.6 10.4 L22 12 L13.6 13.6 L12 22 L10.4 13.6 L2 12 L10.4 10.4 Z" fill="#F2A6C8"/>` },
+  cloud:  { markup: `<ellipse cx="8" cy="14" rx="5" ry="4" fill="#A9C3E3"/><ellipse cx="14" cy="12" rx="6" ry="5" fill="#A9C3E3"/><ellipse cx="18" cy="15" rx="4" ry="3.4" fill="#A9C3E3"/>` },
+  cat: { markup: `<path d="M6 8 L9 3 L11 8 Z" fill="#C98B5E"/><path d="M18 8 L15 3 L13 8 Z" fill="#C98B5E"/><circle cx="12" cy="13" r="7" fill="#C98B5E"/><circle cx="9" cy="12" r="1.1" fill="#3A2A1E"/><circle cx="15" cy="12" r="1.1" fill="#3A2A1E"/><path d="M11 15 L13 15 L12 16.5 Z" fill="#3A2A1E"/>` },
+  dog: { markup: `<ellipse cx="6" cy="12" rx="3" ry="5" fill="#D9A066"/><ellipse cx="18" cy="12" rx="3" ry="5" fill="#D9A066"/><circle cx="12" cy="13" r="7" fill="#E8B37E"/><circle cx="9.5" cy="12" r="1" fill="#3A2A1E"/><circle cx="14.5" cy="12" r="1" fill="#3A2A1E"/><ellipse cx="12" cy="16" rx="1.6" ry="1.2" fill="#3A2A1E"/>` },
+  sun: { markup: `<circle cx="12" cy="12" r="5" fill="#F4C542"/>${rayMarkup(12,12,7,10,8,'#F4C542',2)}` },
+  moon: { markup: `<path d="M15 3 A9 9 0 1 0 15 21 A7 9 0 1 1 15 3 Z" fill="#F2C879"/>` },
+  rainbow: { markup: `<path d="M4 18 A8 8 0 0 1 20 18" fill="none" stroke="#E2685C" stroke-width="2.2"/><path d="M6.2 18 A5.8 5.8 0 0 1 17.8 18" fill="none" stroke="#F4C542" stroke-width="2.2"/><path d="M8.4 18 A3.6 3.6 0 0 1 15.6 18" fill="none" stroke="#3B7DD8" stroke-width="2.2"/>` },
+  balloon: { markup: `<ellipse cx="12" cy="9" rx="6" ry="7" fill="#E2685C"/><path d="M12 16 L12 21" stroke="#8E8E93" stroke-width="1"/><path d="M10.5 16 L13.5 16 L12 18 Z" fill="#E2685C"/>` },
+  gift: { markup: `<rect x="5" y="10" width="14" height="10" fill="#8574C9"/><rect x="5" y="7" width="14" height="4" fill="#6E5CB0"/><rect x="10.5" y="7" width="3" height="13" fill="#F4C542"/>` },
+  cake: { markup: `<rect x="5" y="13" width="14" height="7" rx="1" fill="#F2A6C8"/><rect x="5" y="10" width="14" height="4" rx="1" fill="#E2685C"/><rect x="11" y="4" width="2" height="6" fill="#F4C542"/><circle cx="12" cy="3" r="1.4" fill="#E2685C"/>` },
+  coffee: { markup: `<path d="M5 9 h11 v7 a5.5 5.5 0 0 1 -11 0 Z" fill="#B08463"/><path d="M16 11 h2 a2 2 0 0 1 0 4 h-2" fill="none" stroke="#B08463" stroke-width="1.6"/>` },
+  leaf: { markup: `<path d="M12 3 C20 6 20 16 12 21 C4 16 4 6 12 3 Z" fill="#7FCDBB"/><path d="M12 5 L12 19" stroke="#5AA98E" stroke-width="1"/>` },
+  umbrella: { markup: `<path d="M4 12 A8 8 0 0 1 20 12 Z" fill="#3B7DD8"/><path d="M12 12 L12 20" stroke="#2F63B0" stroke-width="1.6"/><path d="M12 20 q0 2 -2 2" fill="none" stroke="#2F63B0" stroke-width="1.6"/>` },
+  music: { markup: `<circle cx="8" cy="18" r="2.6" fill="#8574C9"/><circle cx="17" cy="16" r="2.6" fill="#8574C9"/><path d="M10.5 18 L10.5 6 L19.5 4 L19.5 16" stroke="#8574C9" stroke-width="1.6" fill="none"/>` },
+  crown: { markup: `<path d="M4 18 L4 10 L8 14 L12 8 L16 14 L20 10 L20 18 Z" fill="#F4C542"/>` },
+  diamond: { markup: `<path d="M12 3 L20 10 L12 21 L4 10 Z" fill="#A9C3E3"/>` },
+  bowtie: { markup: `<path d="M4 9 L11 12 L4 15 Z" fill="#E2685C"/><path d="M20 9 L13 12 L20 15 Z" fill="#E2685C"/><circle cx="12" cy="12" r="1.8" fill="#B5443A"/>` },
+  paw: { markup: `<ellipse cx="12" cy="15" rx="5" ry="4" fill="#C98B5E"/><circle cx="6" cy="9" r="2.1" fill="#C98B5E"/><circle cx="11" cy="6.2" r="2.1" fill="#C98B5E"/><circle cx="16" cy="6.5" r="2.1" fill="#C98B5E"/><circle cx="18.5" cy="10" r="2" fill="#C98B5E"/>` },
+  fish: { markup: `<ellipse cx="10" cy="12" rx="7" ry="5" fill="#3B7DD8"/><path d="M17 12 L22 8 L22 16 Z" fill="#3B7DD8"/><circle cx="7" cy="11" r="1" fill="#fff"/>` },
+  bird: { markup: `<ellipse cx="11" cy="13" rx="6" ry="5" fill="#F2A6C8"/><path d="M17 12 L21 10 L18 14 Z" fill="#F4C542"/><circle cx="8" cy="11" r="1" fill="#fff"/>` },
+  tree: { markup: `<circle cx="12" cy="9" r="7" fill="#7FCDBB"/><rect x="10.5" y="15" width="3" height="6" fill="#B08463"/>` },
+  snowflake: { markup: `${rayMarkup(12,12,3,10,6,'#A9C3E3',1.6)}` },
+  candy: { markup: `<path d="M7 8 L17 8 Q19 12 17 16 L7 16 Q5 12 7 8 Z" fill="#F2A6C8"/><path d="M6 7 L2 4 L2 10 Z" fill="#F2A6C8"/><path d="M6 17 L2 20 L2 14 Z" fill="#F2A6C8"/><path d="M18 7 L22 4 L22 10 Z" fill="#F2A6C8"/><path d="M18 17 L22 20 L22 14 Z" fill="#F2A6C8"/>` },
+  book: { markup: `<rect x="4" y="5" width="16" height="14" rx="1.5" fill="#8574C9"/><line x1="12" y1="5" x2="12" y2="19" stroke="#6E5CB0" stroke-width="1.4"/>` },
+  clock: { markup: `<circle cx="12" cy="12" r="8" fill="#F5F5F7" stroke="#3B7DD8" stroke-width="1.6"/><line x1="12" y1="12" x2="12" y2="7" stroke="#3B7DD8" stroke-width="1.6"/><line x1="12" y1="12" x2="16" y2="13" stroke="#3B7DD8" stroke-width="1.6"/>` },
+  flag: { markup: `<line x1="6" y1="3" x2="6" y2="21" stroke="#8E8E93" stroke-width="1.6"/><path d="M6 4 L18 7 L6 10 Z" fill="#E2685C"/>` }
+};
+function stickerSvg(key, size){
+  const s = STICKERS[key];
+  if(!s) return '';
+  return `<svg viewBox="0 0 24 24" width="${size||18}" height="${size||18}">${s.markup}</svg>`;
+}
 
 function allCats(type){
   return BASE_CATS[type].map(c=>({...c, custom:false}))
@@ -364,7 +461,7 @@ function findCat(name){
   return {type:"expense"};
 }
 
-let state = { transactions: [], month: null, tab: "home", selectedDay: null, historyFilter: { mode: 'all', start: null, end: null } };
+let state = { transactions: [], month: null, tab: "home", selectedDay: null, historyFilter: { mode: 'all', start: null, end: null }, decorateMode: false };
 
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function monthOf(d){ return d.slice(0,7); }
@@ -454,9 +551,11 @@ function startApp(){
       const data = snap.data();
       state.transactions = data.transactions ? JSON.parse(data.transactions) : [];
       customCats = data.customCategories ? JSON.parse(data.customCategories) : { income: [], expense: [], saving: [] };
+      decorations = data.decorations ? JSON.parse(data.decorations) : {};
     } else {
       state.transactions = [];
       customCats = { income: [], expense: [], saving: [] };
+      decorations = {};
     }
     render();
   }, (err) => {
@@ -476,7 +575,8 @@ async function save(){
   try{
     await docRef.set({
       transactions: JSON.stringify(state.transactions),
-      customCategories: JSON.stringify(customCats)
+      customCategories: JSON.stringify(customCats),
+      decorations: JSON.stringify(decorations)
     });
   }catch(e){
     console.error("저장 실패", e);
@@ -528,8 +628,13 @@ function calendarHtml(list){
     const cls = ['cal-cell'];
     if(dateStr === todayFull) cls.push('today');
     if(dateStr === state.selectedDay) cls.push('selected');
+    const dayStickers = decorations[dateStr] || [];
     cells.push(`
       <div class="${cls.join(' ')}" data-date="${dateStr}">
+        ${dayStickers.length ? `<div class="cal-sticker-stack">
+          ${dayStickers.slice(0,3).map((k,i)=>`<span class="cal-sticker-item" style="margin-left:${i>0?-9:0}px; z-index:${3-i};">${stickerSvg(k,15)}</span>`).join('')}
+          ${dayStickers.length>3 ? `<span class="cal-sticker-more">+${dayStickers.length-3}</span>` : ''}
+        </div>` : ''}
         <div class="daynum">${day}</div>
         ${d && d.income>0 ? `<div class="cal-amt income">+${d.income.toLocaleString()}</div>` : ''}
         ${d && d.expense>0 ? `<div class="cal-amt expense">-${d.expense.toLocaleString()}</div>` : ''}
@@ -658,8 +763,15 @@ function render(){
         </div>
       </div>
       <div class="cal-topbar">
+        <button id="decorateBtn" class="${state.decorateMode?'active':''}">${state.decorateMode?'꾸미기 완료':'꾸미기'}</button>
         <button id="todayBtn">오늘</button>
       </div>
+      ${state.decorateMode ? `
+        <div class="sticker-tray-hint">스티커를 날짜 위로 끌어다 놓아보세요</div>
+        <div class="sticker-tray">
+          ${Object.keys(STICKERS).map(key => `<div class="sticker-tray-item" data-sticker-key="${key}">${stickerSvg(key,24)}</div>`).join('')}
+        </div>
+      ` : ''}
       ${calendarHtml(list)}
     </div>
 
@@ -729,9 +841,21 @@ function render(){
     state.selectedDay = todayStr();
     render();
   };
+  document.getElementById('decorateBtn').onclick = ()=>{
+    state.decorateMode = !state.decorateMode;
+    render();
+  };
   document.querySelectorAll('.cal-cell[data-date]').forEach(c=>{
-    c.onclick = () => { state.selectedDay = c.dataset.date; render(); };
+    c.onclick = () => {
+      if(state.decorateMode){
+        openStickerPicker(c.dataset.date);
+      } else {
+        state.selectedDay = c.dataset.date;
+        render();
+      }
+    };
   });
+  wireStickerDrag();
 
   wireTileEvents(document, (cat) => openKeypad(cat));
   const sweepBtn = document.getElementById('sweepBtn');
@@ -851,6 +975,97 @@ function wireTileEvents(root, onOpenKeypad){
   root.querySelectorAll('.add-tile').forEach(t=>{
     t.onclick = () => openAddCategory(t.dataset.type);
   });
+}
+
+function addStickerToDay(dateStr, key){
+  if(!decorations[dateStr]) decorations[dateStr] = [];
+  decorations[dateStr].push(key);
+  save();
+  render();
+}
+function removeStickerAt(dateStr, index){
+  if(!decorations[dateStr]) return;
+  decorations[dateStr].splice(index, 1);
+  if(decorations[dateStr].length === 0) delete decorations[dateStr];
+  save();
+  render();
+}
+function clearStickers(dateStr){
+  delete decorations[dateStr];
+  save();
+  render();
+}
+function wireStickerDrag(){
+  document.querySelectorAll('.sticker-tray-item').forEach(item=>{
+    item.addEventListener('pointerdown', (e)=>{
+      e.preventDefault();
+      const key = item.dataset.stickerKey;
+      const ghost = document.createElement('div');
+      ghost.className = 'sticker-ghost';
+      ghost.innerHTML = stickerSvg(key, 36);
+      document.body.appendChild(ghost);
+
+      const move = (ev)=>{
+        ghost.style.left = (ev.clientX - 18) + 'px';
+        ghost.style.top = (ev.clientY - 18) + 'px';
+        document.querySelectorAll('.cal-cell.drag-over').forEach(el=>el.classList.remove('drag-over'));
+        const under = document.elementFromPoint(ev.clientX, ev.clientY);
+        const cell = under ? under.closest('.cal-cell[data-date]') : null;
+        if(cell) cell.classList.add('drag-over');
+      };
+      move(e);
+
+      const up = (ev)=>{
+        document.removeEventListener('pointermove', move);
+        document.removeEventListener('pointerup', up);
+        ghost.remove();
+        document.querySelectorAll('.cal-cell.drag-over').forEach(el=>el.classList.remove('drag-over'));
+        const under = document.elementFromPoint(ev.clientX, ev.clientY);
+        const cell = under ? under.closest('.cal-cell[data-date]') : null;
+        if(cell) addStickerToDay(cell.dataset.date, key);
+      };
+      document.addEventListener('pointermove', move);
+      document.addEventListener('pointerup', up, { once:true });
+    });
+  });
+}
+
+function openStickerPicker(dateStr){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay';
+  const current = decorations[dateStr] || [];
+  overlay.innerHTML = `
+    <div class="sheet" style="max-height:82vh; overflow-y:auto;">
+      <div class="head"><span class="name">${formatDayLabel(dateStr)} 꾸미기</span></div>
+      ${current.length ? `
+        <div class="sticker-current">
+          ${current.map((k,i)=>`
+            <span class="sticker-chip">${stickerSvg(k,20)}<button type="button" class="sticker-chip-x" data-idx="${i}">✕</button></span>
+          `).join('')}
+        </div>
+      ` : `<div class="empty" style="padding:10px 0;">아직 붙인 스티커가 없어요.</div>`}
+      <div class="section-title" style="margin:10px 0 6px; padding:0;">탭해서 추가</div>
+      <div class="sticker-grid">
+        ${Object.keys(STICKERS).map(key => `
+          <button type="button" class="sticker-opt" data-key="${key}">${stickerSvg(key, 26)}</button>
+        `).join("")}
+      </div>
+      <div class="actions">
+        <button class="cancel" id="stickerClear">전부 지우기</button>
+        <button class="save" id="stickerClose">닫기</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.querySelectorAll('.sticker-opt').forEach(btn=>{
+    btn.onclick = () => { addStickerToDay(dateStr, btn.dataset.key); overlay.remove(); openStickerPicker(dateStr); };
+  });
+  overlay.querySelectorAll('.sticker-chip-x').forEach(btn=>{
+    btn.onclick = () => { removeStickerAt(dateStr, parseInt(btn.dataset.idx,10)); overlay.remove(); openStickerPicker(dateStr); };
+  });
+  overlay.querySelector('#stickerClear').onclick = () => { clearStickers(dateStr); overlay.remove(); };
+  overlay.querySelector('#stickerClose').onclick = () => overlay.remove();
+  overlay.onclick = (e) => { if(e.target === overlay) overlay.remove(); };
 }
 
 function confirmDeleteCategory(type, name){
