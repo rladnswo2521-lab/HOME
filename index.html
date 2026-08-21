@@ -579,6 +579,12 @@ function startApp(){
       state.transactions = data.transactions ? JSON.parse(data.transactions) : [];
       customCats = data.customCategories ? JSON.parse(data.customCategories) : { income: [], expense: [], saving: [] };
       decorations = data.decorations ? JSON.parse(data.decorations) : {};
+      // 예전 버전(하루에 스티커 1개, 문자열 저장) 데이터를 배열 형태로 자동 변환
+      Object.keys(decorations).forEach(k => {
+        if(!Array.isArray(decorations[k])){
+          decorations[k] = decorations[k] ? [decorations[k]] : [];
+        }
+      });
     } else {
       state.transactions = [];
       customCats = { income: [], expense: [], saving: [] };
@@ -655,7 +661,8 @@ function calendarHtml(list){
     const cls = ['cal-cell'];
     if(dateStr === todayFull) cls.push('today');
     if(dateStr === state.selectedDay) cls.push('selected');
-    const dayStickers = decorations[dateStr] || [];
+    let dayStickers = decorations[dateStr] || [];
+    if(!Array.isArray(dayStickers)) dayStickers = dayStickers ? [dayStickers] : [];
     cells.push(`
       <div class="${cls.join(' ')}" data-date="${dateStr}">
         ${dayStickers.length ? `<div class="cal-sticker-stack">
