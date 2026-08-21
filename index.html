@@ -16,9 +16,21 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Jua&display=swap" rel="stylesheet">
 
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script>
+window.onerror = function(msg, src, line, col, err){
+  var el = document.getElementById('app') || document.body;
+  el.innerHTML = '<div class="loading" style="text-align:left; word-break:break-word; padding:20px;">'
+    + '<b>에러가 발생했어요:</b><br><br>'
+    + String(msg) + '<br><br>'
+    + '위치: ' + src + ' 줄 ' + line + '<br><br>'
+    + '이 화면을 그대로 캡처해서 Claude에게 보여주세요.'
+    + '</div>';
+  return false;
+};
+</script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" onerror="document.getElementById('app').innerHTML='<div class=\'loading\'>firebase-app-compat.js 파일을 못 불러왔어요.<br><br>인터넷 연결 상태(와이파이/LTE)를 확인하거나<br>다른 네트워크에서 다시 시도해보세요.</div>'"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js" onerror="document.getElementById('app').innerHTML='<div class=\'loading\'>firebase-firestore-compat.js 파일을 못 불러왔어요.<br><br>인터넷 연결 상태(와이파이/LTE)를 확인하거나<br>다른 네트워크에서 다시 시도해보세요.</div>'"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js" onerror="document.getElementById('app').innerHTML='<div class=\'loading\'>firebase-auth-compat.js 파일을 못 불러왔어요.<br><br>인터넷 연결 상태(와이파이/LTE)를 확인하거나<br>다른 네트워크에서 다시 시도해보세요.</div>'"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
   :root{
