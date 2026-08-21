@@ -489,13 +489,28 @@ async function load(){
       </div>`;
     return;
   }
+  let authResolved = false;
   auth.onAuthStateChanged((user) => {
+    authResolved = true;
     if(user){
       startApp();
     } else {
       renderLogin();
     }
   });
+  setTimeout(() => {
+    if(!authResolved){
+      document.getElementById('app').innerHTML = `
+        <div class="loading">
+          로그인 상태 확인이 너무 오래 걸려요.<br><br>
+          1) 사파리(파일 미리보기 아님)에서<br>
+          실제 주소로 열었는지 확인<br>
+          2) 인터넷 연결 확인<br>
+          3) 새로고침 해보기<br><br>
+          계속 이러면 Claude에게 이 화면을 캡처해서 보여주세요.
+        </div>`;
+    }
+  }, 6000);
 }
 
 function renderLogin(){
