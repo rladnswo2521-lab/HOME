@@ -127,6 +127,7 @@ window.onerror = function(msg, src, line, col, err){
   .tile:active{ transform: scale(0.95); }
   .tile.pressing{ background: #FBEAEA; border-color: var(--expense); transition: background .2s, border-color .2s; }
   .tile .name{ font-size:10.5px; margin-top:4px; color:var(--ink); line-height:1.2; }
+  .fixed-badge{ font-size:8.5px; color:var(--saving); font-weight:700; margin-top:2px; }
   .tile.add-tile{
     background: transparent; border:1px dashed var(--line) !important; border-top-style:dashed !important;
   }
@@ -148,6 +149,7 @@ window.onerror = function(msg, src, line, col, err){
   }
   .cal-cell.empty{ cursor:default; }
   .cal-cell.today{ background:#E9E9EC; }
+  .cal-cell.month-start{ box-shadow: inset 0 2px 0 var(--line); }
   .cal-cell.selected{ background:var(--ink); }
   .cal-cell.drag-over{ background:var(--income); outline:2px dashed #fff; outline-offset:-3px; }
   .cal-cell .daynum{ font-size:11px; font-weight:600; color:var(--ink); }
@@ -188,10 +190,11 @@ window.onerror = function(msg, src, line, col, err){
     display:flex; align-items:center; justify-content:space-between; padding: 16px 20px 4px;
   }
   .hist-filter-label{ font-size:12px; color:var(--ink-soft); }
-  .hist-filterbar button{
+  .hist-filterbar button, .trash-restore{
     background:var(--card2); border:1px solid var(--line); border-radius:14px; padding:5px 14px;
     font-size:12px; color:var(--ink); cursor:pointer; font-weight:600;
   }
+  .trash-restore{ background:var(--income); color:#fff; border-color:var(--income); padding:6px 12px; font-size:11px; }
   .day-label{ font-size:11px; color:var(--ink-soft); margin:14px 0 6px; letter-spacing:0.5px; }
   .row{
     display:flex; align-items:center; gap:10px; padding:10px 12px; margin-bottom:8px;
@@ -253,6 +256,17 @@ window.onerror = function(msg, src, line, col, err){
   .stat-bottom{ display:flex; justify-content:space-between; align-items:center; margin-top:6px; }
   .stat-cum{ font-size:10.5px; color:var(--ink-soft); font-variant-numeric: tabular-nums; }
 
+  .budget-row{ margin-top:10px; padding-top:10px; border-top:1px dashed var(--line); }
+  .budget-label{ display:flex; justify-content:space-between; align-items:center; margin-top:5px; font-size:11px; color:var(--ink-soft); }
+  .budget-label .over{ color:var(--expense); font-weight:700; }
+  .budget-of{ color:var(--ink-soft); }
+  .budget-edit, .budget-set{
+    background:none; border:1px solid var(--line); border-radius:10px; padding:3px 10px;
+    font-size:10.5px; color:var(--ink-soft); cursor:pointer;
+  }
+  .budget-set{ margin-top:10px; width:100%; text-align:center; padding:7px 0; }
+  .carry-balance{ font-size:12px; font-weight:800; margin-top:6px; text-align:right; }
+
   .footer{ text-align:center; padding: 8px 0 6px; font-size:10.5px; color:var(--ink-soft); }
   .footer button{ background:none; border:none; text-decoration:underline; color:var(--ink-soft); cursor:pointer; font-size:10.5px; }
 
@@ -282,6 +296,12 @@ window.onerror = function(msg, src, line, col, err){
   .seg button.active{ background:var(--ink); color:var(--paper); border-color:var(--ink); }
 
   .sticker-grid{ display:grid; grid-template-columns:repeat(5,1fr); gap:8px; margin-bottom:14px; }
+  .quick-amt-grid{ display:grid; grid-template-columns:repeat(2,1fr); gap:8px; margin-bottom:14px; }
+  .quick-amt-btn{
+    background:#fff; border:1px solid var(--line); border-radius:10px; padding:14px 0;
+    font-size:15px; font-weight:700; color:var(--ink); cursor:pointer;
+  }
+  .quick-amt-btn:active{ background:var(--paper); transform:scale(0.97); }
   .sticker-opt{
     background:#fff; border:1px solid var(--line); border-radius:10px; padding:8px 0;
     display:flex; align-items:center; justify-content:center; cursor:pointer;
@@ -392,7 +412,8 @@ const BASE_CATS = {
     {name:"차량"},
     {name:"OTT/구독"},
     {name:"대출이자"},
-    {name:"개인용돈"},
+    {name:"개인용돈(남편)"},
+    {name:"개인용돈(아내)"},
     {name:"생활비"},
     {name:"경조사비"},
     {name:"여행비"}
@@ -407,6 +428,38 @@ const BASE_CATS = {
 let customCats = { income: [], expense: [], saving: [] };
 // 다이어리 꾸미기용 스티커: { 'YYYY-MM-DD': 'star' }
 let decorations = {};
+// 삭제 복원용 휴지통: [{...transaction, deletedAt}]
+let trash = [];
+// 카테고리별 월 예산 한도: { 카테고리명: 금액 }
+let budgets = {};
+// 간편등록: 매달 똑같은 금액이 나가는 항목 (예: 여행비 적립) 탭 한 번에 바로 기록
+let fixedAmounts = {};
+// 이월 적용 카테고리: { 카테고리명: true } — 안 쓴 금액이 다음 주기로 누적됨
+let budgetCarryover = {};
+function effectiveBudget(name){
+  return budgets[name];
+}
+// 이월 누적 잔액 계산: (budget × 지금까지의 주기 수) - 그 기간 동안 실제 지출 합계
+function cumulativeAllowance(name, budgetAmt){
+  const catCycles = [...new Set(state.transactions.filter(t=>t.category===name).map(t=>cycleKeyForDate(t.date)))];
+  let firstCycle = state.month;
+  if(catCycles.length){
+    catCycles.sort();
+    if(catCycles[0] < firstCycle) firstCycle = catCycles[0];
+  }
+  let balance = 0;
+  let cur = firstCycle;
+  let guard = 0;
+  while(cur <= state.month && guard < 240){
+    const spentThisCycle = state.transactions
+      .filter(t => t.category === name && cycleKeyForDate(t.date) === cur)
+      .reduce((s,t)=>s+t.amount, 0);
+    balance += budgetAmt - spentThisCycle;
+    cur = shiftMonth(cur, 1);
+    guard++;
+  }
+  return balance;
+}
 
 function rayMarkup(cx, cy, rIn, rOut, count, color, width){
   let s = '';
@@ -477,6 +530,49 @@ let state = { transactions: [], month: null, tab: "home", selectedDay: null, his
 
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function monthOf(d){ return d.slice(0,7); }
+
+// ===== 정산 주기: 매달 21일 ~ 다음달 20일 =====
+const CYCLE_START_DAY = 21;
+
+function cycleKeyForDate(dateStr){
+  const [y,m,d] = dateStr.split('-').map(Number);
+  if(d >= CYCLE_START_DAY) return `${y}-${String(m).padStart(2,'0')}`;
+  let py = y, pm = m - 1;
+  if(pm < 1){ pm = 12; py -= 1; }
+  return `${py}-${String(pm).padStart(2,'0')}`;
+}
+function cycleRange(cycleKey){
+  const [y,m] = cycleKey.split('-').map(Number);
+  const start = `${cycleKey}-${String(CYCLE_START_DAY).padStart(2,'0')}`;
+  let ey = y, em = m + 1;
+  if(em > 12){ em = 1; ey += 1; }
+  const end = `${ey}-${String(em).padStart(2,'0')}-${String(CYCLE_START_DAY-1).padStart(2,'0')}`;
+  return [start, end];
+}
+function cycleLabel(cycleKey){
+  const [y,m] = cycleKey.split('-').map(Number);
+  let ey = y, em = m + 1;
+  if(em > 12){ em = 1; ey += 1; }
+  return `${m}.${CYCLE_START_DAY} ~ ${em}.${CYCLE_START_DAY-1}`;
+}
+function nextDay(dateStr){
+  const [y,m,d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m-1, d);
+  dt.setDate(dt.getDate()+1);
+  return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
+}
+function cycleDates(cycleKey){
+  const [start, end] = cycleRange(cycleKey);
+  const dates = [];
+  let cur = start;
+  let guard = 0;
+  while(cur <= end && guard < 40){
+    dates.push(cur);
+    cur = nextDay(cur);
+    guard++;
+  }
+  return dates;
+}
 function fmt(n){ return (n<0?"-":"") + Math.abs(n).toLocaleString() + "원"; }
 function monthLabel(ym){ const [y,m]=ym.split("-"); return `${y}년 ${parseInt(m)}월`; }
 function shiftMonth(ym, delta){
@@ -569,7 +665,7 @@ function logout(){
 }
 
 function startApp(){
-  state.month = monthOf(todayStr());
+  state.month = cycleKeyForDate(todayStr());
   state.selectedDay = todayStr();
 
   // 실시간 동기화: 상대방이 기록하면 내 화면도 자동으로 갱신됨
@@ -579,16 +675,30 @@ function startApp(){
       state.transactions = data.transactions ? JSON.parse(data.transactions) : [];
       customCats = data.customCategories ? JSON.parse(data.customCategories) : { income: [], expense: [], saving: [] };
       decorations = data.decorations ? JSON.parse(data.decorations) : {};
+      trash = data.trash ? JSON.parse(data.trash) : [];
+      budgets = data.budgets ? JSON.parse(data.budgets) : {};
+      fixedAmounts = data.fixedAmounts ? JSON.parse(data.fixedAmounts) : {};
+      budgetCarryover = data.budgetCarryover ? JSON.parse(data.budgetCarryover) : {};
       // 예전 버전(하루에 스티커 1개, 문자열 저장) 데이터를 배열 형태로 자동 변환
       Object.keys(decorations).forEach(k => {
         if(!Array.isArray(decorations[k])){
           decorations[k] = decorations[k] ? [decorations[k]] : [];
         }
       });
+      // 예전 버전(간편등록 금액 1개, 숫자 저장) 데이터를 배열 형태로 자동 변환
+      Object.keys(fixedAmounts).forEach(k => {
+        if(!Array.isArray(fixedAmounts[k])){
+          fixedAmounts[k] = fixedAmounts[k] ? [fixedAmounts[k]] : [];
+        }
+      });
     } else {
       state.transactions = [];
       customCats = { income: [], expense: [], saving: [] };
       decorations = {};
+      trash = [];
+      budgets = {};
+      fixedAmounts = {};
+      budgetCarryover = {};
     }
     render();
   }, (err) => {
@@ -609,7 +719,11 @@ async function save(){
     await docRef.set({
       transactions: JSON.stringify(state.transactions),
       customCategories: JSON.stringify(customCats),
-      decorations: JSON.stringify(decorations)
+      decorations: JSON.stringify(decorations),
+      trash: JSON.stringify(trash),
+      budgets: JSON.stringify(budgets),
+      fixedAmounts: JSON.stringify(fixedAmounts),
+      budgetCarryover: JSON.stringify(budgetCarryover)
     });
   }catch(e){
     console.error("저장 실패", e);
@@ -617,7 +731,33 @@ async function save(){
   }
 }
 function addTransaction(tx){ state.transactions.push(tx); save(); render(); }
-function deleteTransaction(id){ state.transactions = state.transactions.filter(t=>t.id!==id); save(); render(); }
+function deleteTransaction(id){
+  const tx = state.transactions.find(t=>t.id===id);
+  if(!tx) return;
+  state.transactions = state.transactions.filter(t=>t.id!==id);
+  trash.unshift({ ...tx, deletedAt: Date.now() });
+  save();
+  render();
+}
+function restoreTransaction(id){
+  const tx = trash.find(t=>t.id===id);
+  if(!tx) return;
+  trash = trash.filter(t=>t.id!==id);
+  const { deletedAt, ...clean } = tx;
+  state.transactions.push(clean);
+  save();
+  render();
+}
+function purgeTrashItem(id){
+  trash = trash.filter(t=>t.id!==id);
+  save();
+  render();
+}
+function purgeAllTrash(){
+  trash = [];
+  save();
+  render();
+}
 function addCategory(type, name){
   const trimmed = name.trim();
   if(!trimmed) return false;
@@ -633,7 +773,7 @@ function removeCategory(type, name){
   save();
   render();
 }
-function monthTx(){ return state.transactions.filter(t=>monthOf(t.date)===state.month); }
+function monthTx(){ return state.transactions.filter(t=>cycleKeyForDate(t.date)===state.month); }
 
 function formatDayLabel(dateStr){
   const [y,m,d] = dateStr.split('-').map(Number);
@@ -642,9 +782,9 @@ function formatDayLabel(dateStr){
 }
 
 function calendarHtml(list){
-  const [y,m] = state.month.split('-').map(Number);
-  const startWeekday = new Date(y, m-1, 1).getDay();
-  const daysInMonth = new Date(y, m, 0).getDate();
+  const dates = cycleDates(state.month);
+  const [sy,sm,sd] = dates[0].split('-').map(Number);
+  const startWeekday = new Date(sy, sm-1, sd).getDay();
   const todayFull = todayStr();
   const perDay = {};
   list.forEach(t=>{
@@ -655,10 +795,13 @@ function calendarHtml(list){
   });
   let cells = [];
   for(let i=0;i<startWeekday;i++) cells.push('<div class="cal-cell empty"></div>');
-  for(let day=1; day<=daysInMonth; day++){
-    const dateStr = `${state.month}-${String(day).padStart(2,'0')}`;
+  dates.forEach(dateStr => {
+    const [,mm,dd] = dateStr.split('-');
+    const dayNum = parseInt(dd,10);
+    const label = dayNum === 1 ? `${parseInt(mm,10)}/1` : String(dayNum);
     const d = perDay[dateStr];
     const cls = ['cal-cell'];
+    if(dayNum === 1) cls.push('month-start');
     if(dateStr === todayFull) cls.push('today');
     if(dateStr === state.selectedDay) cls.push('selected');
     let dayStickers = decorations[dateStr] || [];
@@ -669,12 +812,12 @@ function calendarHtml(list){
           ${dayStickers.slice(0,3).map((k,i)=>`<span class="cal-sticker-item" style="margin-left:${i>0?-9:0}px; z-index:${3-i};">${stickerSvg(k,15)}</span>`).join('')}
           ${dayStickers.length>3 ? `<span class="cal-sticker-more">+${dayStickers.length-3}</span>` : ''}
         </div>` : ''}
-        <div class="daynum">${day}</div>
+        <div class="daynum">${label}</div>
         ${d && d.income>0 ? `<div class="cal-amt income">+${d.income.toLocaleString()}</div>` : ''}
         ${d && d.expense>0 ? `<div class="cal-amt expense">-${d.expense.toLocaleString()}</div>` : ''}
       </div>
     `);
-  }
+  });
   const weekdayHeader = ['일','월','화','수','목','금','토'].map(w=>`<div class="cal-wd">${w}</div>`).join('');
   return `
     <div class="calendar">
@@ -712,14 +855,49 @@ function dayListHtml(list, dateStr){
   return header + dayItems.map(txRowHtml).join("");
 }
 
+function quickLogFixed(type, name, amount){
+  const dateVal =
+    (state.selectedDay && cycleKeyForDate(state.selectedDay) === state.month) ? state.selectedDay
+    : (state.month === cycleKeyForDate(todayStr())) ? todayStr()
+    : cycleRange(state.month)[0];
+  addTransaction({ id: uid(), date: dateVal, type, category: name, amount, memo: "간편등록" });
+}
+
+function openQuickAmountPicker(type, name, amounts){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay';
+  overlay.innerHTML = `
+    <div class="sheet">
+      <div class="head"><span class="name">${escapeHtml(name)}</span></div>
+      <div class="quick-amt-grid">
+        ${amounts.map(a => `<button type="button" class="quick-amt-btn" data-amt="${a}">${a.toLocaleString()}원</button>`).join('')}
+      </div>
+      <div class="actions">
+        <button class="cancel" id="qaManual">직접 입력</button>
+        <button class="save" id="qaClose">닫기</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.querySelectorAll('.quick-amt-btn').forEach(btn=>{
+    btn.onclick = () => {
+      quickLogFixed(type, name, parseInt(btn.dataset.amt, 10));
+      overlay.remove();
+    };
+  });
+  overlay.querySelector('#qaManual').onclick = () => { overlay.remove(); openKeypad({name, type}); };
+  overlay.querySelector('#qaClose').onclick = () => overlay.remove();
+  overlay.onclick = (e) => { if(e.target === overlay) overlay.remove(); };
+}
+
 function openKeypad(cat){
   const overlay = document.createElement('div');
   overlay.className = 'overlay';
   let amountStr = "";
   const defaultDate =
-    (state.selectedDay && monthOf(state.selectedDay) === state.month) ? state.selectedDay
-    : (state.month === monthOf(todayStr())) ? todayStr()
-    : `${state.month}-01`;
+    (state.selectedDay && cycleKeyForDate(state.selectedDay) === state.month) ? state.selectedDay
+    : (state.month === cycleKeyForDate(todayStr())) ? todayStr()
+    : cycleRange(state.month)[0];
   overlay.innerHTML = `
     <div class="sheet">
       <div class="head">
@@ -779,7 +957,7 @@ function render(){
     <div class="cover">
       <div class="month-nav">
         <button id="prevM">‹</button>
-        <div class="label">${monthLabel(state.month)}</div>
+        <div class="label">${cycleLabel(state.month)}</div>
         <button id="nextM">›</button>
       </div>
     </div>
@@ -843,7 +1021,10 @@ function render(){
     <div class="tabpanel" id="panel-history">
       <div class="hist-filterbar">
         <span class="hist-filter-label">${historyFilterLabel()}</span>
-        <button id="filterBtn">필터</button>
+        <div style="display:flex; gap:6px;">
+          <button id="trashBtn">휴지통${trash.length ? ` (${trash.length})` : ''}</button>
+          <button id="filterBtn">필터</button>
+        </div>
       </div>
       <div class="list">${historyHtml(getHistoryList())}</div>
     </div>
@@ -862,16 +1043,16 @@ function render(){
 
   document.getElementById('prevM').onclick = ()=>{
     state.month = shiftMonth(state.month,-1);
-    state.selectedDay = (state.month === monthOf(todayStr())) ? todayStr() : null;
+    state.selectedDay = (state.month === cycleKeyForDate(todayStr())) ? todayStr() : null;
     render();
   };
   document.getElementById('nextM').onclick = ()=>{
     state.month = shiftMonth(state.month,1);
-    state.selectedDay = (state.month === monthOf(todayStr())) ? todayStr() : null;
+    state.selectedDay = (state.month === cycleKeyForDate(todayStr())) ? todayStr() : null;
     render();
   };
   document.getElementById('todayBtn').onclick = ()=>{
-    state.month = monthOf(todayStr());
+    state.month = cycleKeyForDate(todayStr());
     state.selectedDay = todayStr();
     render();
   };
@@ -895,7 +1076,7 @@ function render(){
   const sweepBtn = document.getElementById('sweepBtn');
   if(sweepBtn){
     sweepBtn.onclick = () => {
-      const sweepDate = (state.month === monthOf(todayStr())) ? todayStr() : lastDayOfMonth(state.month);
+      const sweepDate = (state.month === cycleKeyForDate(todayStr())) ? todayStr() : cycleRange(state.month)[1];
       addTransaction({ id:uid(), date:sweepDate, type:"saving", category:"여유적금", amount:leftover, memo:"자동 계산" });
     };
   }
@@ -907,6 +1088,10 @@ function render(){
     if(confirm("로그아웃 하시겠어요?")) logout();
   };
   document.getElementById('filterBtn').onclick = openHistoryFilter;
+  document.getElementById('trashBtn').onclick = openTrash;
+  document.querySelectorAll('.budget-set, .budget-edit').forEach(btn=>{
+    btn.onclick = () => openBudgetSetting(btn.dataset.cat);
+  });
 
   document.querySelectorAll('.tabbar button').forEach(btn=>{
     btn.onclick = () => { state.tab = btn.dataset.tab; render(); };
@@ -961,6 +1146,14 @@ function renderTrendChart(){
   });
 }
 
+function shortWon(n){
+  return n >= 10000 ? Math.round(n/10000).toLocaleString()+'만' : n.toLocaleString();
+}
+function fixedAmountLabel(arr){
+  if(!arr || arr.length === 0) return '';
+  if(arr.length === 1) return arr[0].toLocaleString()+'원';
+  return arr.map(shortWon).join(' · ');
+}
 function tileHtml(c, type){
   return `<div class="tile" data-name="${c.name}" data-type="${type}" data-custom="${c.custom ? '1':'0'}" style="border-top:3px solid ${TYPE_COLOR[type]};">
     <div class="name">${c.name}</div>
@@ -979,16 +1172,16 @@ function wireTileEvents(root, onOpenKeypad){
   root.querySelectorAll('.tile:not(.add-tile)').forEach(t=>{
     let pressTimer = null;
     let longPressed = false;
-    const isCustom = t.dataset.custom === '1';
+    const name = t.dataset.name;
+    const type = t.dataset.type;
 
     const startPress = () => {
       longPressed = false;
-      if(!isCustom) return;
       t.classList.add('pressing');
       pressTimer = setTimeout(() => {
         longPressed = true;
         t.classList.remove('pressing');
-        confirmDeleteCategory(t.dataset.type, t.dataset.name);
+        openTileOptions(type, name, t.dataset.custom === '1');
       }, 550);
     };
     const cancelPress = () => {
@@ -1003,7 +1196,14 @@ function wireTileEvents(root, onOpenKeypad){
 
     t.onclick = () => {
       if(longPressed){ longPressed = false; return; }
-      onOpenKeypad({name:t.dataset.name, type:t.dataset.type});
+      const fa = fixedAmounts[name];
+      if(fa && fa.length === 1){
+        quickLogFixed(type, name, fa[0]);
+      } else if(fa && fa.length > 1){
+        openQuickAmountPicker(type, name, fa);
+      } else {
+        onOpenKeypad({name, type});
+      }
     };
   });
   root.querySelectorAll('.add-tile').forEach(t=>{
@@ -1102,6 +1302,71 @@ function openStickerPicker(dateStr){
   overlay.onclick = (e) => { if(e.target === overlay) overlay.remove(); };
 }
 
+function addFixedAmount(name, amount){
+  if(!amount || amount <= 0) return;
+  if(!fixedAmounts[name]) fixedAmounts[name] = [];
+  if(!fixedAmounts[name].includes(amount)) fixedAmounts[name].push(amount);
+  save();
+  render();
+}
+function removeFixedAmountAt(name, index){
+  if(!fixedAmounts[name]) return;
+  fixedAmounts[name].splice(index, 1);
+  if(fixedAmounts[name].length === 0) delete fixedAmounts[name];
+  save();
+  render();
+}
+function clearFixedAmounts(name){
+  delete fixedAmounts[name];
+  save();
+  render();
+}
+
+function openTileOptions(type, name, isCustom){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay';
+  const fixedList = fixedAmounts[name] || [];
+  overlay.innerHTML = `
+    <div class="sheet">
+      <div class="head"><span class="name">${escapeHtml(name)}</span></div>
+      <div class="section-title" style="margin:0 0 6px; padding:0;">간편등록 금액 (여러 개 가능)</div>
+      <div style="font-size:12px; color:var(--ink-soft); margin-bottom:10px;">
+        탭 한 번으로 바로 기록돼요. 2개 이상 넣으면 탭할 때 고를 수 있어요.
+      </div>
+      <div class="sticker-current" id="fixedChipList">
+        ${fixedList.length ? fixedList.map((amt,i)=>`
+          <span class="sticker-chip">${amt.toLocaleString()}원<button type="button" class="sticker-chip-x" data-idx="${i}">✕</button></span>
+        `).join('') : `<span style="font-size:12px; color:var(--ink-soft);">설정된 금액이 없어요.</span>`}
+      </div>
+      <div style="display:flex; gap:8px; margin-bottom:16px;">
+        <input type="number" class="memoline" id="newFixedInput" placeholder="금액 추가 (예: 500000)" style="margin-bottom:0; flex:1;">
+        <button class="save" id="addFixedBtn" style="white-space:nowrap;">추가</button>
+      </div>
+      ${isCustom ? `
+        <div class="section-title" style="margin:0 0 6px; padding:0; border-top:1px solid var(--line); padding-top:14px;">카테고리 관리</div>
+        <button class="write-btn" id="tileDelete" style="background:var(--expense);">"${escapeHtml(name)}" 삭제하기</button>
+      ` : ''}
+      <div class="actions" style="margin-top:14px;">
+        <button class="cancel" id="tileClose">닫기</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.querySelectorAll('.sticker-chip-x').forEach(btn=>{
+    btn.onclick = () => { removeFixedAmountAt(name, parseInt(btn.dataset.idx,10)); overlay.remove(); openTileOptions(type, name, isCustom); };
+  });
+  overlay.querySelector('#addFixedBtn').onclick = () => {
+    const v = parseInt(document.getElementById('newFixedInput').value, 10);
+    if(v > 0){ addFixedAmount(name, v); overlay.remove(); openTileOptions(type, name, isCustom); }
+  };
+  const delBtn = overlay.querySelector('#tileDelete');
+  if(delBtn){
+    delBtn.onclick = () => { overlay.remove(); confirmDeleteCategory(type, name); };
+  }
+  overlay.querySelector('#tileClose').onclick = () => overlay.remove();
+  overlay.onclick = (e) => { if(e.target === overlay) overlay.remove(); };
+}
+
 function confirmDeleteCategory(type, name){
   const overlay = document.createElement('div');
   overlay.className = 'overlay';
@@ -1125,6 +1390,79 @@ function confirmDeleteCategory(type, name){
     removeCategory(type, name);
     overlay.remove();
   };
+  overlay.onclick = (e) => { if(e.target === overlay) overlay.remove(); };
+}
+
+function openTrash(){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay';
+  overlay.innerHTML = `
+    <div class="sheet" style="max-height:82vh; overflow-y:auto;">
+      <div class="head"><span class="name">휴지통</span></div>
+      ${trash.length === 0
+        ? `<div class="empty" style="padding:20px 0;">삭제한 기록이 없어요.</div>`
+        : trash.map(t => `
+            <div class="row">
+              <div class="row-icon ${t.type}">${(t.category||'?').trim().charAt(0)}</div>
+              <div class="row-text">
+                <div class="cat">${t.category}</div>
+                <div class="sub">${t.date} ${t.memo ? '· '+escapeHtml(t.memo) : ''}</div>
+              </div>
+              <span class="amount ${t.type}">${t.type==='expense'?'-':'+'}${t.amount.toLocaleString()}원</span>
+              <button class="trash-restore" data-id="${t.id}">복원</button>
+            </div>
+          `).join("")
+      }
+      <div class="actions">
+        <button class="cancel" id="trashClearAll" ${trash.length===0?'disabled':''}>휴지통 비우기</button>
+        <button class="save" id="trashClose">닫기</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.querySelectorAll('.trash-restore').forEach(btn=>{
+    btn.onclick = () => { restoreTransaction(btn.dataset.id); overlay.remove(); openTrash(); };
+  });
+  overlay.querySelector('#trashClearAll').onclick = () => {
+    if(confirm("휴지통을 완전히 비울까요? 되돌릴 수 없어요.")){ purgeAllTrash(); overlay.remove(); }
+  };
+  overlay.querySelector('#trashClose').onclick = () => overlay.remove();
+  overlay.onclick = (e) => { if(e.target === overlay) overlay.remove(); };
+}
+
+function setBudget(name, amount, carryover){
+  if(amount && amount > 0) budgets[name] = amount;
+  else delete budgets[name];
+  if(carryover) budgetCarryover[name] = true;
+  else delete budgetCarryover[name];
+  save();
+  render();
+}
+function openBudgetSetting(name){
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay';
+  overlay.innerHTML = `
+    <div class="sheet">
+      <div class="head"><span class="name">${name} · 월 예산</span></div>
+      <input type="number" class="memoline" id="budgetInput" placeholder="예: 300000" value="${budgets[name]||''}">
+      <label class="remember-row" style="margin-bottom:16px;">
+        <input type="checkbox" id="carryoverCheck" ${budgetCarryover[name]?'checked':''}>
+        안 쓴 금액 다음 달로 이월 (용돈 저축에 편해요)
+      </label>
+      <div class="actions">
+        <button class="cancel" id="budgetRemove">예산 삭제</button>
+        <button class="save" id="budgetSave">저장</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#budgetSave').onclick = () => {
+    const v = parseInt(document.getElementById('budgetInput').value, 10);
+    const carry = document.getElementById('carryoverCheck').checked;
+    setBudget(name, v, carry);
+    overlay.remove();
+  };
+  overlay.querySelector('#budgetRemove').onclick = () => { setBudget(name, 0, false); overlay.remove(); };
   overlay.onclick = (e) => { if(e.target === overlay) overlay.remove(); };
 }
 
@@ -1242,7 +1580,7 @@ function historyFilterLabel(){
 
 function sumsForMonth(ym){
   const t = {income:0, expense:0, saving:0};
-  state.transactions.filter(tx=>monthOf(tx.date)===ym).forEach(tx=> t[tx.type]+=tx.amount);
+  state.transactions.filter(tx=>cycleKeyForDate(tx.date)===ym).forEach(tx=> t[tx.type]+=tx.amount);
   return t;
 }
 
@@ -1269,8 +1607,8 @@ function categoryStats(){
   const curByCat = {}, prevByCat = {}, cumByCat = {};
   state.transactions.forEach(t=>{
     if(t.type === 'income') return;
-    if(monthOf(t.date) === state.month) curByCat[t.category] = (curByCat[t.category]||0) + t.amount;
-    if(monthOf(t.date) === prevMonth) prevByCat[t.category] = (prevByCat[t.category]||0) + t.amount;
+    if(cycleKeyForDate(t.date) === state.month) curByCat[t.category] = (curByCat[t.category]||0) + t.amount;
+    if(cycleKeyForDate(t.date) === prevMonth) prevByCat[t.category] = (prevByCat[t.category]||0) + t.amount;
     cumByCat[t.category] = (cumByCat[t.category]||0) + t.amount;
   });
   const names = new Set([...Object.keys(curByCat), ...Object.keys(prevByCat)]);
@@ -1322,6 +1660,41 @@ function statsHtml(list, totals){
     ? `<div class="empty">아직 지출/저축 기록이 없어요.</div>`
     : catRows.map(c=>{
         const pct = Math.round((c.cur/max)*100);
+        const budget = effectiveBudget(c.name);
+        let budgetBlock;
+        if(budget && budgetCarryover[c.name]){
+          const carryBal = cumulativeAllowance(c.name, budget);
+          const bpct = Math.min(100, Math.round((c.cur/budget)*100));
+          const carryColor = carryBal < 0 ? 'var(--expense)' : 'var(--income)';
+          budgetBlock = `
+            <div class="budget-row">
+              <div class="bar-track"><div class="bar-fill" style="width:${bpct}%; background:${TYPE_COLOR[c.type]};"></div></div>
+              <div class="budget-label">
+                <span>이번 달 ${fmt(c.cur)} <span class="budget-of">/ 지급 ${fmt(budget)}</span></span>
+                <button class="budget-edit" data-cat="${c.name}">수정</button>
+              </div>
+              <div class="carry-balance" style="color:${carryColor};">
+                ${carryBal < 0 ? '초과 사용' : '사용 가능 잔액'} ${fmt(Math.abs(carryBal))}
+              </div>
+            </div>
+          `;
+        } else if(budget){
+          const remaining = budget - c.cur;
+          const bpct = Math.min(100, Math.round((c.cur/budget)*100));
+          const over = remaining < 0;
+          const bColor = over ? 'var(--expense)' : bpct >= 80 ? '#D6A93B' : 'var(--income)';
+          budgetBlock = `
+            <div class="budget-row">
+              <div class="bar-track"><div class="bar-fill" style="width:${bpct}%; background:${bColor};"></div></div>
+              <div class="budget-label">
+                <span class="${over?'over':''}">${over ? fmt(Math.abs(remaining))+' 초과' : fmt(remaining)+' 남음'} <span class="budget-of">/ 예산 ${fmt(budget)}</span></span>
+                <button class="budget-edit" data-cat="${c.name}">수정</button>
+              </div>
+            </div>
+          `;
+        } else {
+          budgetBlock = `<button class="budget-set" data-cat="${c.name}">+ 예산 설정</button>`;
+        }
         return `
           <div class="stat-card">
             <div class="stat-top">
@@ -1333,6 +1706,7 @@ function statsHtml(list, totals){
               ${momBadge(c.cur, c.prev)}
               <span class="stat-cum">누계 ${fmt(c.cum)}</span>
             </div>
+            ${budgetBlock}
           </div>
         `;
       }).join("");
